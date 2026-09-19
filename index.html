@@ -758,4 +758,419 @@ function renderFilterBar(){
       toggleWrap.appendChild(allBtn);
       controls.appendChild(toggleWrap);
     }
-    filterBar.append
+    filterBar.appendChild(controls);
+  }
+}
+
+function filteredVideos(){
+  let list = videos;
+  if(activeFilters.size > 0){
+    list = list.filter(v=>{
+      const vtags = new Set(v.tags||[]);
+      const need = [...activeFilters];
+      return matchAll
+        ? need.every(id=>vtags.has(id))
+        : need.some(id=>vtags.has(id));
+    });
+  }
+  if(searchQuery.trim()){
+    const q = searchQuery.trim().toLowerCase();
+    list = list.filter(v=>
+      (v.title||'').toLowerCase().includes(q) ||
+      (v.note||'').toLowerCase().includes(q)
+    );
+  }
+  return list;
+}
+
+function renderGrid(){
+  const list = filteredVideos();
+  grid.innerHTML = '';
+  if(videos.length === 0){
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">Your library is empty. Tap + to add your first video.</div>`;
+    return;
+  }
+  if(list.length === 0){
+    grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1">Nothing matches.</div>`;
+    return;
+  }
+  list.slice().reverse().forEach(v=>{
+    const card = document.createElement('div');
+    card.className = 'card';
+    const img = (v.images && v.images[0])
+      ? `<img src="${v.images[0]}">`
+      : `<div class="noimg">No image</div>`;
+    const tagHtml = (v.tags||[]).map(id=>`<span>${tagName(id)}</span>`).join('');
+    const titleHtml = v.title ? `<div class="title">${escapeHtml(v.title)}</div>` : '';
+    card.innerHTML = `
+      <div class="thumb">${img}</div>
+      <div class="body">
+        ${titleHtml}
+        <div class="tags">${tagHtml}</div>
+        <div class="row">
+          <button class="open">Open</button>
+          <button class="edit-btn">✎</button>
+        </div>
+      </div>
+    `;
+    card.querySelector('.open').onclick = ()=> window.open(v.link, '_blank');
+    card.querySelector('.edit-btn').onclick = ()=> openEdit(v);
+    grid.appendChild(card);
+  });
+}
+
+function openSheet(){
+  backdrop.classList.add('show');
+  sheet.classList.add('show');
+}
+function closeSheetFn(){
+  backdrop.classList.remove('show');
+  sheet.classList.remove('show');
+}
+
+function resetForm(){
+  editingId = null;
+  pendingImages = [];
+  pendingTagIds = new Set();
+  $('#titleInput').value = '';
+  $('#linkInput').value = '';
+  $('#noteInput').value = '';
+  $('#tagSearchInput').value = '';
+  $('#sheetTitle').textContent = 'Add video';
+  $('#deleteLink').style.display = 'none';
+  renderImgRow();
+  renderTagSelect();
+}
+
+function openEdit(v){
+  editingId = v.id;
+  pendingImages = (v.images || []).slice();
+  pendingTagIds = new Set(v.tags || []);
+  $('#titleInput').value = v.title || '';
+  $('#linkInput').value = v.link || '';
+  $('#noteInput').value = v.note || '';
+  $('#tagSearchInput').value = '';
+  $('#sheetTitle').textContent = 'Edit video';
+  $('#deleteLink').style.display = 'block';
+  renderImgRow();
+  renderTagSelect();
+  openSheet();
+}
+
+function renderImgRow(){
+  const row = $('#imgRow');
+  row.querySelectorAll('.img-slot.filled').forEach(el=>el.remove());
+  pendingImages.forEach((src, i)=>{
+    const slot = document.createElement('div');
+    slot.className = 'img-slot filled';
+    slot.innerHTML = `<img src="${src}"><div class="rm">&times;</div>`;
+    slot.querySelector('.rm').onclick = ()=>{
+      pendingImages.splice(i,1);
+      renderImgRow();
+    };
+    row.insertBefore(slot, $('#imgFile').parentElement);
+  });
+  $('#imgFile').parentElement.style.display = pendingImages.length >= 3 ? 'none' : 'flex';
+}
+
+function renderTagSelect(){
+  const wrap = $('#tagSelect');
+  wrap.innerHTML = '';
+  if(tags.length === 0){
+    wrap.innerHTML = `<span style="color:var(--text-dim); font-size:13px;">No tags yet — add one below</span>`;
+    return;
+  }
+  const q = ($('#tagSearchInput').value || '').trim().toLowerCase();
+  const visible = q ? tags.filter(t=>t.name.toLowerCase().includes(q)) : tags;
+  if(visible.length === 0){
+    wrap.innerHTML = `<span style="color:var(--text-dim); font-size:13px;">No tags match</span>`;
+    return;
+  }
+  visible.forEach(t=>{
+    const opt = document.createElement('div');
+    opt.className = 'opt' + (pendingTagIds.has(t.id) ? ' sel' : '');
+    opt.textContent = t.name;
+    opt.onclick = ()=>{
+      if(pendingTagIds.has(t.id)) pendingTagIds.delete(t.id);
+      else pendingTagIds.add(t.id);
+      renderTagSelect();
+    };
+    wrap.appendChild(opt);
+  });
+}
+
+function resizeImage(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const maxW = 480;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.72));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+$('#imgFile').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  try{
+    const dataUrl = await resizeImage(file);
+    pendingImages.push(dataUrl);
+    renderImgRow();
+  }catch(err){
+    toast('Could not read image');
+  }
+  e.target.value = '';
+});
+
+$('#addTagBtn').addEventListener('click', async ()=>{
+  const input = $('#newTagInput');
+  const name = input.value.trim();
+  if(!name) return;
+  const existing = tags.find(t=>t.name.toLowerCase() === name.toLowerCase());
+  if(existing){
+    pendingTagIds.add(existing.id);
+    toast('Tag already exists — selected it');
+  } else {
+    const t = { id: uid(), name };
+    tags.push(t);
+    pendingTagIds.add(t.id);
+    await saveTags();
+  }
+  input.value = '';
+  renderTagSelect();
+});
+$('#newTagInput').addEventListener('keydown', e=>{
+  if(e.key === 'Enter'){ e.preventDefault(); $('#addTagBtn').click(); }
+});
+
+$('#addBtn').addEventListener('click', ()=>{
+  resetForm();
+  openSheet();
+});
+$('#closeSheet').addEventListener('click', closeSheetFn);
+backdrop.addEventListener('click', closeSheetFn);
+
+$('#saveBtn').addEventListener('click', async ()=>{
+  const link = $('#linkInput').value.trim();
+  if(!link){ toast('Add a video link first'); return; }
+
+  if(!editingId){
+    const dupe = videos.find(v => normalizeLink(v.link) === normalizeLink(link));
+    if(dupe){
+      closeSheetFn();
+      toast('Already in your library — opening it');
+      openEdit(dupe);
+      return;
+    }
+  }
+
+  const title = $('#titleInput').value.trim();
+  const note = $('#noteInput').value.trim();
+  if(editingId){
+    const v = videos.find(x=>x.id===editingId);
+    v.title = title;
+    v.link = link;
+    v.note = note;
+    v.images = pendingImages.slice();
+    v.tags = [...pendingTagIds];
+  } else {
+    videos.push({
+      id: uid(),
+      title,
+      link,
+      note,
+      images: pendingImages.slice(),
+      tags: [...pendingTagIds]
+    });
+  }
+  await saveVideos();
+  closeSheetFn();
+  render();
+  toast('Saved');
+});
+
+$('#deleteLink').addEventListener('click', async ()=>{
+  if(!editingId) return;
+  videos = videos.filter(v=>v.id !== editingId);
+  await saveVideos();
+  closeSheetFn();
+  render();
+  toast('Deleted');
+});
+
+$('#tagSearchInput').addEventListener('input', renderTagSelect);
+
+$('#searchInput').addEventListener('input', (e)=>{
+  searchQuery = e.target.value;
+  renderGrid();
+});
+
+$('#openBackupPage').addEventListener('click', ()=>{
+  $('#backupPage').classList.add('show');
+});
+$('#closeBackupPage').addEventListener('click', ()=>{
+  $('#backupPage').classList.remove('show');
+});
+
+$('#exportBtn').addEventListener('click', ()=>{
+  const data = { videos, tags, exportedAt: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,10);
+  a.href = url;
+  a.download = `vault-backup-${stamp}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  toast('Backup file downloaded');
+});
+
+$('#importFile').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  try{
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if(!Array.isArray(data.videos) || !Array.isArray(data.tags)){
+      toast('That doesn\'t look like a valid backup file');
+      return;
+    }
+
+    // Merge tags: match by name, remap ids from the backup to this device's ids
+    const idMap = {};
+    data.tags.forEach(bt=>{
+      const existing = tags.find(t=>t.name.toLowerCase() === bt.name.toLowerCase());
+      if(existing){
+        idMap[bt.id] = existing.id;
+      } else {
+        const newTag = { id: uid(), name: bt.name };
+        tags.push(newTag);
+        idMap[bt.id] = newTag.id;
+      }
+    });
+
+    // Merge videos: skip ones whose link already exists here
+    let added = 0, skipped = 0;
+    data.videos.forEach(bv=>{
+      const dupe = videos.find(v => normalizeLink(v.link) === normalizeLink(bv.link));
+      if(dupe){ skipped++; return; }
+      videos.push({
+        id: uid(),
+        title: bv.title || '',
+        link: bv.link,
+        note: bv.note || '',
+        images: bv.images || [],
+        tags: (bv.tags || []).map(oldId => idMap[oldId]).filter(Boolean)
+      });
+      added++;
+    });
+
+    await saveTags();
+    await saveVideos();
+    render();
+    toast(`Restored ${added} video${added===1?'':'s'}${skipped ? `, skipped ${skipped} already here` : ''}`);
+  }catch(err){
+    toast('Could not read that file');
+  }
+  e.target.value = '';
+});
+
+$('#openTagsPage').addEventListener('click', ()=>{
+  $('#tagsPageSearch').value = '';
+  renderTagsPage();
+  $('#tagsPage').classList.add('show');
+});
+$('#closeTagsPage').addEventListener('click', ()=>{
+  $('#tagsPage').classList.remove('show');
+});
+$('#tagsPageSearch').addEventListener('input', renderTagsPage);
+
+function videoCountForTag(tagId){
+  return videos.filter(v=>(v.tags||[]).includes(tagId)).length;
+}
+
+function renderTagsPage(){
+  const list = $('#tagsPageList');
+  list.innerHTML = '';
+  const q = ($('#tagsPageSearch').value || '').trim().toLowerCase();
+  const visible = (q ? tags.filter(t=>t.name.toLowerCase().includes(q)) : tags)
+    .slice().sort((a,b)=>a.name.localeCompare(b.name));
+  if(visible.length === 0){
+    list.innerHTML = `<div class="tags-empty">${tags.length===0 ? 'No tags yet.' : 'No tags match.'}</div>`;
+    return;
+  }
+  visible.forEach(t=>{
+    const row = document.createElement('div');
+    row.className = 'tag-row';
+    const count = videoCountForTag(t.id);
+    row.innerHTML = `
+      <div class="name">${escapeHtml(t.name)}</div>
+      <div class="n-count">${count}</div>
+      <button class="rn">Rename</button>
+      <button class="del">Delete</button>
+    `;
+    row.querySelector('.rn').onclick = ()=> startRenameTag(row, t);
+    row.querySelector('.del').onclick = ()=> deleteTag(t);
+    list.appendChild(row);
+  });
+}
+
+function startRenameTag(row, t){
+  const nameDiv = row.querySelector('.name');
+  nameDiv.innerHTML = `<input type="text" value="${escapeHtml(t.name)}">`;
+  const input = nameDiv.querySelector('input');
+  input.focus();
+  input.select();
+  const rnBtn = row.querySelector('.rn');
+  rnBtn.textContent = 'Save';
+  rnBtn.className = 'rn-save';
+  rnBtn.onclick = async ()=>{
+    const newName = input.value.trim();
+    if(!newName) return;
+    const dupe = tags.find(x=>x.id!==t.id && x.name.toLowerCase()===newName.toLowerCase());
+    if(dupe){ toast('A tag with that name already exists'); return; }
+    t.name = newName;
+    await saveTags();
+    renderTagsPage();
+    render();
+    toast('Renamed');
+  };
+}
+
+async function deleteTag(t){
+  const count = videoCountForTag(t.id);
+  const msg = count > 0
+    ? `Delete "${t.name}"? It'll be removed from ${count} video${count===1?'':'s'}.`
+    : `Delete "${t.name}"?`;
+  if(!confirm(msg)) return;
+  tags = tags.filter(x=>x.id !== t.id);
+  videos.forEach(v=>{
+    if(v.tags) v.tags = v.tags.filter(id=>id!==t.id);
+  });
+  activeFilters.delete(t.id);
+  await saveTags();
+  await saveVideos();
+  renderTagsPage();
+  render();
+  toast('Tag deleted');
+}
+
+loadData();
+</script>
+</body>
+</html>
